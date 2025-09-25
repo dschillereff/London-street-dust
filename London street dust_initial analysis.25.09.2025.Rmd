@@ -11,20 +11,259 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+###Install and load packages
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(RColorBrewer)
+library(gridExtra)
+library(reshape2)
+library(scales)
+library(gghalves)
+library(ggdist)
+library(dplyr)
+library(knitr)    # for kable
+library(kableExtra) # for styling the table
 
-```{r cars}
-summary(cars)
+
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+###Load the XRF data
+```{r}
+#setwd("C:\\Users\\Danie\\OneDrive - King's College London\\London Street Dust\\XRF results")
+setwd("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\XRF results")
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+xrf1 <- read.csv("Londonstreetdust_xrf_25.09.2025.csv")
+
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+###Group 1, Priority elements: Cd, Cu, Fe, Pb, Zn
+```{r Summary table of concentrations}
+xrf.1.long <- xrf1 %>% 
+                  pivot_longer(cols = "Al":"Zr",
+                               cols_vary = "slowest",
+                               names_to = c("Element"),
+                               values_to = "Concentration", 
+                               values_drop_na = TRUE
+                                )
+Group1.elements <- c("Cd", "Cu", "Fe", "Pb", "Zn")
+
+xrf.Group1.long <- xrf.1.long %>%
+  filter(Element %in% Group1.elements) %>%
+  filter(!is.na(Concentration))
+
+# Function to calculate geometric mean safely (ignores zeros or negatives)
+geo_mean <- function(x) {
+  x <- x[x > 0]  # geometric mean only makes sense for positive values
+  if(length(x) == 0) return(NA)
+  exp(mean(log(x)))
+}
+
+#Create a table
+summary_table <- xrf.Group1.long %>%
+  group_by(Element) %>%
+  summarise(
+    'Arithmetic Mean' = round(mean(Concentration, na.rm = TRUE), 1),
+    'Geometric Mean' = round(geo_mean(Concentration),1),
+    Median = round(median(Concentration, na.rm = TRUE), 1),
+    SD = round(sd(Concentration, na.rm = TRUE), 1),
+    Range = paste0(round(min(Concentration, na.rm = TRUE),0), "–", round(max(Concentration, na.rm = TRUE), 0))
+  ) %>% 
+    ungroup()
+
+table1 <- summary_table %>%
+  kable(
+    caption = "Summary statistics of element concentrations (mg/kg)",
+    digits = 0,
+    align = c("l", "r", "r", "r", "r", "r"),
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+
+
+```
+
+
+```{r Boxplots}
+xrf.1.long <- xrf1 %>% 
+                  pivot_longer(cols = "Al":"Zr",
+                               cols_vary = "slowest",
+                               names_to = c("Element"),
+                               values_to = "Concentration", 
+                               values_drop_na = TRUE
+                                )
+Group1.elements <- c("Cd", "Cu", "Fe", "Pb", "Zn")
+
+xrf.Group1.long <- xrf.1.long %>%
+  filter(Element %in% Group1.elements) %>%
+  filter(!is.na(Concentration))
+
+xrf.Group1.long %>%
+  group_by(Element) %>%
+  summarize(n = n(), n_na = sum(is.na(Concentration)), class_type = class(Concentration[1]))
+
+xrf.Group1.long$Concentration <- as.numeric(xrf.Group1.long$Concentration)
+
+#Plotting as horizontal lines
+p1 <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
+  geom_point(
+    shape = 95,         # underscore-like horizontal line
+    size = 50,           # adjust point size
+    alpha = 0.2,        # transparency
+    color = "darkgrey"
+  ) +
+  facet_wrap(~Element, nrow = 1, scales = "free_y") +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "Concentration (mg/kg)"
+  ) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+
+#Now plotting as boxplots
+p2 <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
+  geom_boxplot(
+    width = 0.3,        # narrow box
+    outlier.shape = NA  # remove default outliers
+  ) +
+  geom_jitter(
+    width = 0.05,       # horizontal jitter
+    size = 2,
+    alpha = 0.5,
+    color = "darkgrey"
+  ) +
+  facet_wrap(~Element, nrow = 1, scales = "free_y") + # one row, free y-axis per element
+  scale_y_continuous(n.breaks = 8, expand = expansion(mult = c(0.05, 0.05))) +  # more tick marks
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  labs(
+    y = "Concentration (mg/kg)"
+  )
+
+
+```
+
+
+#Analysing Group 1 data
+
+I've then added as horizontal dashed red lines the continental crustal averages of Rudnick & Gao 2003. The vast majority of samples are heavily enriched in Cu, Pb and Zn compared to crustal (shale) averages. (I need to check, I think Cd was reported in Gao et al. 2008). Fe is generally lower. 
+
+```{r Boxplots with crustal averages plotted}
+Wedepohl <- data.frame(
+  Element = c("Cd", "Cu", "Fe", "Pb", "Zn"),
+  thresh = c(NA, 14.3, 30890, 17, 52)  # example values
+)
+
+TaylorMcLennan <- data.frame(
+  Element = c("Cd", "Cu", "Fe", "Pb", "Zn"),
+  thresh = c(NA, 25, (3.5*10000), 20, 71)  # example values
+)
+
+RudnickGao <- data.frame(
+  Element = c("Cd", "Cu", "Fe", "Pb", "Zn"),
+  thresh = c(NA, 28, (3.525 * 10000), 17, 67)  # example values
+)
+
+xrf.1.long <- xrf1 %>% 
+                  pivot_longer(cols = "Al":"Zr",
+                               cols_vary = "slowest",
+                               names_to = c("Element"),
+                               values_to = "Concentration", 
+                               values_drop_na = TRUE
+                                )
+Group1.elements <- c("Cd", "Cu", "Fe", "Pb", "Zn")
+
+xrf.Group1.long <- xrf.1.long %>%
+  filter(Element %in% Group1.elements) %>%
+  filter(!is.na(Concentration))
+
+xrf.Group1.long %>%
+  group_by(Element) %>%
+  summarize(n = n(), n_na = sum(is.na(Concentration)), class_type = class(Concentration[1]))
+
+xrf.Group1.long$Concentration <- as.numeric(xrf.Group1.long$Concentration)
+
+#Plotting as horizontal lines
+p1b <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
+  geom_point(
+    shape = 95,         # underscore-like horizontal line
+    size = 50,           # adjust point size
+    alpha = 0.2,        # transparency
+    color = "darkgrey"
+  ) +
+   geom_hline(
+    data = RudnickGao, 
+    aes(yintercept = thresh),
+    linetype = "dashed",
+    color = "red"
+  ) +
+  facet_wrap(~Element, nrow = 1, scales = "free_y") +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "Concentration (mg/kg)"
+  ) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+
+#Now plotting as boxplots
+p2b <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
+  geom_boxplot(
+    width = 0.3,        # narrow box
+    outlier.shape = NA  # remove default outliers
+  ) +
+  geom_jitter(
+    width = 0.05,       # horizontal jitter
+    size = 2,
+    alpha = 0.5,
+    color = "darkgrey"
+  ) +
+  geom_hline(
+    data = RudnickGao, 
+    aes(yintercept = thresh),
+    linetype = "dashed",
+    color = "red"
+  ) +
+  facet_wrap(~Element, nrow = 1, scales = "free_y") + # one row, free y-axis per element
+  scale_y_continuous(n.breaks = 8, expand = expansion(mult = c(0.05, 0.05))) +  # more tick marks
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  labs(
+    y = "Concentration (mg/kg)"
+  )
+
+
+```
+
+
+
