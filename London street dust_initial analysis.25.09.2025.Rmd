@@ -550,7 +550,7 @@ for (el in Group1.elements) {
 ```
 
 
-```{r}
+```{r Plotting over external environmental data}
 # Read borough shapefile (download from e.g., London DataStore)
 LAEI2022_pm10 <- st_read("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\LAEI2022-Emissions-Summary-GIS-Files\\Shapefile SHP\\LAEI2022-pm10-grid-emissions-all-sources.shp")
 
@@ -573,6 +573,91 @@ Pb_PM10 <- ggplot() +
     title = "Pb Concentrations - 2019 London Atmospheric Emissions Inventory LAEI",
     color = "Concentration (mg/kg)"
   )
+
+#NOx from industrial and commercial
+LAEI2022_nox_industrialcommercial <- st_read("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\LAEI2022-Emissions-Summary-GIS-Files\\Shapefile SHP\\LAEI2022-nox-grid-emissions-domestic.shp")
+
+nox_industrialcommercial_sf <- st_transform(LAEI2022_nox_industrialcommercial, crs = st_crs(london_boroughs))
+nox_industrialcommercial_sf_clipped <- st_intersection(nox_industrialcommercial_sf, london_boroughs)
+
+Pb_nox_industrialcommercial_sf <- ggplot() +
+  geom_sf(data = london_boroughs, fill = "gray95", color = "black") +
+  geom_sf(data = nox_industrialcommercial_sf_clipped, aes(fill = HeatPow_19), color = NA) +  geom_sf(data = london_points_Pb,
+    aes(size = Concentration),   # map size to concentration
+    shape = 21,                  # filled circle
+    fill = "black", 
+    color = "black", 
+    alpha = 0.7
+  ) +
+  scale_size_continuous(range = c(1, 5)) +  # adjust min/max point sizes
+  scale_fill_viridis_c(option = "plasma", name = "NOx_2019") +
+  theme_bw() +
+  labs(
+    title = "Pb Concentrations - Industrial + Commercial NOx emissions 2019 (LAEI)",
+    color = "Concentration (mg/kg)"
+  )
+
+
+Group1.elements <- c("Cd", "Cu", "Fe", "Pb", "Zn")
+
+# Optional: remove rows with missing coordinates
+xrf_sf_clean <- xrf_sf %>% filter(!is.na(geometry))
+
+# ---- Function to plot a single element ----
+plot_element_map <- function(element_name, xrf_sf, london_boroughs, nox_industrialcommercial_sf_clipped) {
+  
+  # Subset points for this element
+  xrf_element <- xrf_sf %>%
+    filter(Element == element_name)
+  
+  # Plot
+  p <- ggplot() +
+    geom_sf(data = london_boroughs, fill = "gray95", color = "black") +
+    
+    # NOx background (industrial + commercial emissions)
+    geom_sf(data = nox_industrialcommercial_sf_clipped, aes(fill = HeatPow_19), color = NA) +
+    
+    # Points sized by concentration
+    geom_sf(
+      data = xrf_element,
+      aes(size = Concentration),
+      shape = 21,
+      fill = "black",
+      color = "black",
+      alpha = 0.7
+    ) +
+    
+    scale_size_continuous(range = c(1, 5)) +
+    scale_fill_viridis_c(option = "plasma", name = "NOx (2019)") +
+    theme_bw() +
+    labs(
+      title = paste(element_name, "Concentrations - Industrial + Commercial NOx emissions 2019 (LAEI)"),
+      size = "Concentration (mg/kg)"
+    )
+
+}
+
+
+for (el in Group1.elements) {
+  map <- plot_element_map(el, london_points, london_boroughs, nox_industrialcommercial_sf_clipped)
+  #windows()
+  print(map)   # shows each map individually in RStudio / plotting window
+  
+  # If you want to save each as a file (optional):
+  # ggsave(paste0("map_", el, ".png"), map, width = 8, height = 6, dpi = 300)
+}
+
+
+map_list <- lapply(Group1.elements, function(el) {
+  plot_element_map(el, london_points, london_boroughs, nox_industrialcommercial_sf_clipped)
+})
+
+# Arrange all five in a single row
+all_maps <- wrap_plots(map_list, nrow = 1)
+
+all_maps
+
+
 
 # List all layers in the GeoPackage
 layers <- st_layers("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\Locally_Significant_Industrial_Sites_LSIS.gpkg")
@@ -627,6 +712,77 @@ test111 <- ggplot() +
     title = "Pb Concentrations - Locally Industrial Industrial Sites",
     color = "Concentration (mg/kg)"
   )
+```
+
+```{r Correlation matrix}
+#Run a series of pairwise correlation tests using the cor() function
+xrf1.selected <- Filter(is.numeric, xrf1[,c(2:4, 6:7, 9:15,17:19,21:22,24:26, 28:34)])
+xrf1.priority <- Filter(is.numeric, xrf1[,c(2:4, 7, 9:11,17:19,22,28,33:34)])
+cor.1 <- cor(xrf1.selected, use = "pairwise.complete.obs")
+cor.2 <- cor(xrf1.priority, use = "pairwise.complete.obs")
+
+
+#use the head() function to see what this function has produced
+head(cor.2)
+
+# Build a ramp function to interpolate the colours along a scale
+colsc=c(rgb(241, 54, 23, maxColorValue=255), 'white', rgb(0, 61, 104, maxColorValue=255))
+
+colramp <- colorRampPalette(colsc, space='Lab')
+
+colors = colramp(100)
+
+#Create the matrices in sequence 
+corplot.2 <- my.plotcorr(cor.2, col=colors[((cor.2 + 1)/2) * 100], diag='ellipse', upper.panel="number", mar=c(0,2,0,0),
+            cex=1.15,
+            cex.lab=1.5,
+            main='Dust composition - major elements')
+
+
+```
+
+
+
+```{r, k means clustering}
+#Good walk through https://uc-r.github.io/kmeans_clustering 
+
+
+library(tidyverse)  # data manipulation
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering algorithms & visualization
+
+set.seed(123)
+xrf.1.nona <- na.omit(xrf1)
+xrf.1.nona <- scale(xrf.1.nona)
+head(xrf.1.nona)
+
+distance <- get_dist(xrf.1.nona)
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+#Evaluate how many clusters is optimal
+fviz_nbclust(xrf.1.nona, kmeans, method = "wss") #Elbow plot
+fviz_nbclust(xrf.1.nona, kmeans, method = "silhouette") #Silhouette assessment 
+gap_stat <- clusGap(xrf.1.nona, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+fviz_gap_stat(gap_stat) #Gap method
+
+km.res <- kmeans(dat3, 5, nstart = 25)
+
+str(km.res)
+
+km.res
+fviz_cluster(km.res, data = dat3)
+km.res$cluster
+
+#NEED TO TRY HEIRARCHAL CLUSTERING, MIGHT MAKE MORE SENSE FOR THESE DATA AND COMPARE SUBGROUPS TO MAIN/MIINOR ROADS
+
+df %>%
+  as_tibble() %>%
+  mutate(cluster = km.res$cluster,
+         state = row.names(dat3)) %>%
+  ggplot(aes(UrbanPop, Murder, color = factor(cluster), label = state)) +
+  geom_text()
+
 ```
 
 
