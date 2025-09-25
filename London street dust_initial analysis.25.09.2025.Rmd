@@ -27,6 +27,13 @@ library(dplyr)
 library(knitr)    # for kable
 library(kableExtra) # for styling the table
 
+#And for spatial mapping
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)
+#library(ggmap)
+
 
 ```
 
@@ -162,11 +169,6 @@ p2 <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
 
 ```
 
-
-#Analysing Group 1 data
-
-I've then added as horizontal dashed red lines the continental crustal averages of Rudnick & Gao 2003. The vast majority of samples are heavily enriched in Cu, Pb and Zn compared to crustal (shale) averages. (I need to check, I think Cd was reported in Gao et al. 2008). Fe is generally lower. 
-
 ```{r Boxplots with crustal averages plotted}
 Wedepohl <- data.frame(
   Element = c("Cd", "Cu", "Fe", "Pb", "Zn"),
@@ -263,6 +265,368 @@ p2b <- ggplot(xrf.Group1.long, aes(x = 1, y = Concentration)) +
   )
 
 
+```
+
+```{r Spatial plotting using OSM tiles}
+
+sampleinfo1 <- read.csv("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\XRF results\\Londonstreetdust_sampleinfo.csv")
+
+coords <- sampleinfo1 %>%
+  select(Sample, Longitude, Latitude)
+
+xrf_coords <- xrf.Group1.long %>%
+  left_join(coords, by = "Sample")
+
+xrf_coords_clean <- xrf_coords %>%
+  filter(!is.na(Longitude) & !is.na(Latitude))
+
+# Convert to sf object
+xrf_sf <- st_as_sf(
+  xrf_coords_clean,
+  coords = c("Longitude", "Latitude"),  # column names in your CSV
+  crs = 4326   # WGS84 (standard lat/long)
+)
+
+xrf_sf_pb <- xrf_sf %>% 
+  filter(Element == "Pb")  # only Pb points
+
+# Make sure coordinates are WGS84
+xrf_sf_pb <- st_transform(xrf_sf_pb, 4326)
+
+# Compute bounding box of Pb points
+bbox <- st_bbox(xrf_sf_pb)
+
+# Optionally expand slightly so points aren't on the edge
+expand <- 0.01  # ~0.01 degrees ~ 1 km
+xlim <- c(bbox["xmin"] - expand, bbox["xmax"] + expand)
+ylim <- c(bbox["ymin"] - expand, bbox["ymax"] + expand)
+
+#Produces a map of Pb overlaying London OSM. Takes a while to loads and too much amp clutter
+Pbmap1 <- ggplot() +
+  annotation_map_tile(type = "osm", zoom = 12) +  # only type and zoom
+  geom_sf(data = xrf_sf_pb, aes(color = Concentration), size = 3) +
+  coord_sf(xlim = xlim, ylim = ylim) +  # zoom to bounding box
+  scale_color_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(
+    title = "Sample Locations Colored by Pb Concentration",
+    color = "Concentration (mg/kg)"
+  )
+
+
+#Using Stadia maps - this requires an API
+# Get a Stamen tile
+#london_map <- get_stadiamap(
+#  bbox = c(left = -0.25, bottom = 51.45, right = 0.15, top = 51.60),
+#  zoom = 12,
+#  maptype = "stamen_terrain"
+#)
+
+```
+
+```{r Now using natural earth basemap}
+# Base map of UK (or Europe)
+uk <- ne_countries(scale = "medium", country = "United Kingdom", returnclass = "sf")
+rivers <- ne_download(scale = "medium", type = "rivers_lake_centerlines", category = "physical", returnclass = "sf")
+
+# Plot Pb points
+Pbmap2 <- ggplot() +
+  geom_sf(data = uk, fill = "gray95", color = "gray80") +
+  geom_sf(data = rivers, color = "blue") +
+  geom_sf(data = xrf_sf_pb, aes(color = Concentration), size = 3) +
+  coord_sf(xlim = c(-0.25, 0.15), ylim = c(51.45, 51.60)) +
+  scale_color_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(title = "Pb Concentrations in London", color = "Concentration (mg/kg)")
+
+
+#Plotting over major roads
+library(osmdata)
+
+# Define London bounding box
+bbox_london <- c(-0.25, 51.45, 0.15, 51.60)
+
+# Get major roads and rivers
+london_osm <- opq(bbox = bbox_london) %>%
+  add_osm_feature(key = "highway", value = c("primary", "secondary")) %>%
+  osmdata_sf()
+
+roads <- london_osm$osm_lines
+
+Pb_map_roads <- ggplot() +
+  geom_sf(data = roads, color = "gray50") +
+  geom_sf(data = xrf_sf_pb, aes(color = Concentration), size = 3) +
+  scale_color_viridis_c(option = "plasma") +
+  coord_sf(xlim = c(-0.25, 0.15), ylim = c(51.45, 51.60)) +
+  theme_minimal() +
+  labs(title = "Pb Concentrations with Major Roads", color = "Concentration (mg/kg)")
+
+
+```
+
+```{r Plotting Pb over Boroughs}
+#Plotting over Boroughs
+setwd("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\XRF results")
+
+# Read borough shapefile (download from e.g., London DataStore)
+london_boroughs <- st_read("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\statistical-gis-boundaries-london\\statistical-gis-boundaries-london\\ESRI\\London_Borough_Excluding_MHW.shp")
+
+
+xrf_sf_pb <- st_transform(xrf_sf_pb, st_crs(london_boroughs)) #convert to BNG
+
+london_bbox <- st_bbox(c(
+  xmin = 508000, xmax = 551000,   # Easting (metres)
+  ymin = 167000, ymax = 193000    # Northing (metres)
+), crs = st_crs(london_boroughs))
+
+london_points <- st_crop(xrf_sf_pb, london_bbox)
+london_boroughs_crop <- st_crop(london_boroughs, london_bbox)
+
+Pb_boroughs_allsamples <- ggplot() +
+  geom_sf(data = london_boroughs_crop, fill = "gray95", color = "gray80") +
+  geom_sf(data = london_points %>% filter(Element == "Pb"),
+          aes(color = Concentration), size = 4, shape = 16) +
+  scale_color_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(
+    title = "Pb Concentrations - all samples",
+    color = "Concentration (mg/kg)"
+  )
+
+#Now plotting only samples where Pb < 1000 ppm
+xrf_sf_pb_1000 <- xrf_sf %>%
+  filter(Element == "Pb", Concentration <= 1000)
+
+xrf_sf_pb_1000 <- st_transform(xrf_sf_pb_1000, st_crs(london_boroughs)) #convert to BNG
+
+london_bbox <- st_bbox(c(
+  xmin = 508000, xmax = 551000,   # Easting (metres)
+  ymin = 167000, ymax = 193000    # Northing (metres)
+), crs = st_crs(london_boroughs))
+
+london_points_Pb <- st_crop(xrf_sf_pb_1000, london_bbox)
+london_boroughs_crop <- st_crop(london_boroughs, london_bbox)
+
+Pb_boroughs_1000ppm <- ggplot() +
+  geom_sf(data = london_boroughs_crop, fill = "gray95", color = "gray80") +
+  geom_sf(data = london_points_Pb,
+          aes(color = Concentration), size = 4, shape = 16) +
+  scale_color_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(
+    title = "Pb Concentrations < 1000 mg/kg",
+    color = "Concentration (mg/kg)"
+  )
+
+#Now plotting as varying size
+Pb_boroughs_1000ppm_size <- ggplot() +
+  geom_sf(data = london_boroughs_crop, fill = "gray95", color = "gray80") +
+  geom_sf(data = london_points_Pb,
+    aes(size = Concentration),   # map size to concentration
+    shape = 21,                  # filled circle
+    fill = "black", 
+    #color = "black", 
+    alpha = 0.7
+  ) +
+  scale_size_continuous(range = c(2, 8)) +  # adjust min/max point sizes
+  theme_minimal() +
+  labs(
+    title = "Pb Concentrations < 1000 mg/kg",
+    size = "Concentration (mg/kg)"
+  )
+
+
+
+
+```
+
+```{r Plotting all Group 1 elements as facets over Boroughs}
+sampleinfo1 <- read.csv("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\XRF results\\Londonstreetdust_sampleinfo.csv")
+
+coords <- sampleinfo1 %>%
+  select(Sample, Longitude, Latitude)
+
+xrf_coords <- xrf.Group1.long %>%
+  left_join(coords, by = "Sample")
+
+xrf_coords_clean <- xrf_coords %>%
+  filter(!is.na(Longitude) & !is.na(Latitude))
+
+# Convert to sf object
+xrf_sf <- st_as_sf(
+  xrf_coords_clean,
+  coords = c("Longitude", "Latitude"),  # column names in your CSV
+  crs = 4326   # WGS84 (standard lat/long)
+)
+
+#convert coordinate system to BNG
+xrf_sf <- st_transform(xrf_sf, st_crs(london_boroughs))
+
+london_bbox <- st_bbox(c(
+  xmin = 508000, xmax = 551000,   # Easting (metres)
+  ymin = 167000, ymax = 193000    # Northing (metres)
+), crs = st_crs(london_boroughs))
+
+london_points <- st_crop(xrf_sf, london_bbox)
+london_boroughs_crop <- st_crop(london_boroughs, london_bbox)
+
+#TRYING AS FACETS BUT TRICKY BECAUSE DIFFERENT SCALES
+# Plot faceted map
+Group1_boroughs <- ggplot() +
+  geom_sf(data = london_boroughs, fill = "gray95", color = "gray80") +
+  geom_sf(data = london_points,
+    aes(size = Concentration),   # map size to concentration
+    shape = 21,                  # filled circle
+    fill = "black", 
+    color = "black", 
+    alpha = 0.7
+  ) +
+  scale_size_continuous(range = c(2, 8)) +
+  scale_color_viridis_c(option = "plasma") +
+  facet_wrap(~Element) +
+  theme_minimal() +
+  labs(
+    title = "XRF Sample Concentrations by Element",
+    size = "Concentration (mg/kg)",
+    color = "Concentration (mg/kg)"
+  )
+
+
+
+
+#WILL TRY IN A LOOP
+Group1.elements <- c("Cd", "Cu", "Fe", "Pb", "Zn")
+
+# Convert to sf object
+xrf_sf <- st_as_sf(
+  xrf_coords_clean,
+  coords = c("Longitude", "Latitude"),  # column names in your CSV
+  crs = 4326   # WGS84 (standard lat/long)
+)
+
+#convert coordinate system to BNG
+xrf_sf <- st_transform(xrf_sf, st_crs(london_boroughs))
+
+# Optional: remove rows with missing coordinates
+xrf_sf_clean <- xrf_sf %>% filter(!is.na(geometry))
+
+# Loop through each element and create a separate map
+for (el in Group1.elements) {
+
+  # Filter data for this element
+  xrf_el <- xrf_sf %>% filter(Element == el)
+  
+  # Create the map
+  p <- ggplot() +
+    geom_sf(data = london_boroughs, fill = "gray95", color = "gray80") +
+    geom_sf(
+      data = xrf_el,
+      aes(size = Concentration),   # map size to concentration
+      shape = 21,                  # filled circle
+      fill = "black", 
+      color = "black", 
+      alpha = 0.7
+    ) +
+    scale_size_continuous(range = c(1, 6)) +
+    #scale_color_viridis_c(option = "plasma") +
+    #coord_sf(
+    #  xlim = c(-0.25, 0.15),  # approximate London longitudes
+    #  ylim = c(51.45, 51.60)  # approximate London latitudes
+    #) +
+    theme_bw() +
+    labs(
+      title = paste("XRF Sample Concentrations of", el),
+      size = "Concentration (mg/kg)",
+      color = "Concentration (mg/kg)"
+    )
+  
+  # Print the map
+  print(p)
+  
+  # Optionally, save each map as a file
+  # ggsave(filename = paste0("XRF_map_", el, ".png"), plot = p, width = 7, height = 6)
+}
+
+```
+
+
+```{r}
+# Read borough shapefile (download from e.g., London DataStore)
+LAEI2022_pm10 <- st_read("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\LAEI2022-Emissions-Summary-GIS-Files\\Shapefile SHP\\LAEI2022-pm10-grid-emissions-all-sources.shp")
+
+PM10_sf <- st_transform(LAEI2022_pm10, crs = st_crs(london_boroughs))
+PM10_sf_clipped <- st_intersection(PM10_sf, london_boroughs)
+
+Pb_PM10 <- ggplot() +
+  geom_sf(data = london_boroughs, fill = "gray95", color = "black") +
+  geom_sf(data = PM10_sf_clipped, aes(fill = all_2019), color = NA) +  geom_sf(data = london_points_Pb,
+    aes(size = Concentration),   # map size to concentration
+    shape = 21,                  # filled circle
+    fill = "black", 
+    color = "black", 
+    alpha = 0.7
+  ) +
+  scale_size_continuous(range = c(1, 5)) +  # adjust min/max point sizes
+  scale_fill_viridis_c(option = "plasma", name = "all_2019") +
+  theme_bw() +
+  labs(
+    title = "Pb Concentrations - 2019 London Atmospheric Emissions Inventory LAEI",
+    color = "Concentration (mg/kg)"
+  )
+
+# List all layers in the GeoPackage
+layers <- st_layers("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\Locally_Significant_Industrial_Sites_LSIS.gpkg")
+
+industrialsites_sf <- st_read("C:\\Users\\User\\OneDrive - King's College London\\London Street Dust\\London data\\Shapefiles\\Locally_Significant_Industrial_Sites_LSIS.gpkg", layer = "Locally_Significant_Industrial_Sites_LSIS")
+
+# Convert Easting/Northing into an sf object
+industrialsites_sf <- st_as_sf(industrialsites_sf,
+                     coords = c("Easting", "Northing"),  # specify coordinate columns
+                     crs = 27700)                        # example: British National Grid (OSGB36)
+
+st_geometry(industrialsites_sf)
+st_crs(industrialsites_sf) <- 27700
+industrialsites_sf <- st_transform(industrialsites_sf, crs = st_crs(london_boroughs), options = "NO_GRIDSHIFT=YES")
+
+#industrialsites_sf <- st_transform(industrialsites_sf, st_crs(london_boroughs)) #convert to BNG
+
+london_bbox <- st_bbox(c(
+  xmin = 508000, xmax = 551000,   # Easting (metres)
+  ymin = 167000, ymax = 193000    # Northing (metres)
+), crs = st_crs(london_boroughs))
+
+london_points <- st_crop(xrf_sf_pb, london_bbox)
+london_boroughs_crop <- st_crop(london_boroughs, london_bbox)
+industrialsites_crop <- st_crop(industrialsites_sf, london_bbox)
+
+Pb_boroughs_industrialsite_allsamples <- ggplot() +
+  geom_sf(data = london_boroughs_crop, fill = "gray95", color = "gray80") +
+  geom_sf(data = industrialsites_crop, fill = "red", color = "gray80") +
+  geom_sf(data = london_points %>% filter(Element == "Pb"),
+          aes(color = Concentration), size = 4, shape = 16) +
+  scale_color_viridis_c(option = "plasma") +
+  theme_minimal() +
+  labs(
+    title = "Pb Concentrations - all samples",
+    color = "Concentration (mg/kg)"
+  )
+
+
+test111 <- ggplot() +
+  geom_sf(data = london_boroughs, fill = "gray95", color = "black") +
+  geom_sf(data = industrialsites_sf, fill = "red", color = "red", size = 1) +  geom_sf(data = london_points_Pb,
+    aes(size = Concentration),   # map size to concentration
+    shape = 21,                  # filled circle
+    fill = "black", 
+    color = "black", 
+    alpha = 0.7
+  ) +
+  scale_size_continuous(range = c(1, 5)) +  # adjust min/max point sizes
+  theme_bw() +
+  labs(
+    title = "Pb Concentrations - Locally Industrial Industrial Sites",
+    color = "Concentration (mg/kg)"
+  )
 ```
 
 
